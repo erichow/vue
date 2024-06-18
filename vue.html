@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>vue</title>
+	<script>
+		let activeUpdate = undefined
+
+		class EventEmitter {
+		  constructor() {
+		    this.handlers = {}
+		  }
+		  on(eventName, handler) {
+		    if (!this.handlers[eventName]) {
+		      this.handlers[eventName] = []
+		    }
+		    this.handlers[eventName].push(handler)
+		  }
+		  emit(eventName,...args) {
+		    this.handlers[eventName]?.forEach(handler => {
+		      handler(...args)
+		    })
+		  }
+		}
+
+		class Vue {
+			constructor(options) {
+				this.$el = document.querySelector(options.el)
+				this.$data = this.observe(options.data)
+				this.$methods = options.methods
+				this.compile()
+			}
+
+			observe(data) {
+				if (typeof data !== 'object' || data === null) {
+					return data 
+				}
+				const m = {}
+				const ee = new EventEmitter()
+				return new Proxy(data, {
+					get: (tar, key) => {
+						m[key] = m[key] || this.observe(tar[key])
+						activeUpdate && ee.on(key, activeUpdate)
+						return m[key]
+					},
+					set: (tar, key, val) => {
+						m[key] = val
+						ee.emit(key, val)
+						return true
+					},
+				})
+			}
+
+			compile() {
+				const fragment = document.createDocumentFragment()
+				let child
+				while (child = this.$el.firstChild) {
+					fragment.appendChild(child)
+				}
+
+				const compile_fragment = (vm, node) => {
+					// Text node
+					if (node.nodeType === 3) { 
+						const pattern = /\{\{\s*(\S+?)\s*\}\}/g
+						const originText = node.nodeValue
+						const replacements = []
+						let match
+						while (match = pattern.exec(originText)) {
+							const expression = match[1]
+							const startIndex = match.index
+							const endIndex = match[0].length + startIndex
+							const value = expression.split('.').reduce((acc, cur) => {
+								return acc[cur]
+							}, vm.$data)
+							replacements.push({ expression, value, startIndex, endIndex })
+						}
+
+						~function generateText(flag) {
+							let newText = ''
+							let curIndex = 0
+							replacements.forEach(replacement => {
+								const { expression, value, startIndex, endIndex } = replacement
+								newText += originText.slice(curIndex, startIndex)
+								newText += value
+								curIndex = endIndex
+								if (flag) {
+									activeUpdate = newValue => {
+										replacement.value = newValue
+										generateText()
+									}
+									expression.split('.').reduce((acc, cur) => acc[cur], vm.$data)
+									activeUpdate = null
+								}
+							})
+							newText += originText.slice(curIndex)
+							node.nodeValue = newText
+						}(true)
+					}
+
+					// Element node
+					if (node.nodeType === 1) { 
+						const attrs = Array.from(node.attributes);
+						attrs.forEach(attr => {
+							const nodeName = attr.nodeName
+							const expression = attr.nodeValue
+							const instruction = nodeName
+							switch (instruction) {
+								case 'v-bind':
+									const value = expression.split('.').reduce((acc, cur) => acc[cur], vm.$data)
+									node.setAttribute('value', value)
+									activeUpdate = newValue => {
+										node.setAttribute('value', newValue)
+									}
+									expression.split('.').reduce((acc, cur) => acc[cur], vm.$data)
+									activeUpdate = null
+									break
+								case 'v-click':
+									const method = vm.$methods[expression]
+									if (method) {
+										node.addEventListener('click', method.bind(vm.$data))
+									}
+									break
+								default:
+									break
+							}
+						})
+					}
+					node.childNodes.forEach(child => compile_fragment(vm, child))
+				}
+				compile_fragment(this, fragment)
+				this.$el.appendChild(fragment)
+			}
+		}
+
+	</script>
+</head>
+<body>
+	<div id="app">
+		<p>{{name}},{{age}}</p>
+		<input v-bind="age" />
+		<p v-click="handleClick">{{ user.name }} is {{ user.age }} years old and lives in {{ user.location.city }}</p>
+		<input v-model="user.name" />
+		<input v-model="user.age" />
+		<input v-model="user.location.city" />
+	</div>
+	<script type="text/javascript">
+		const app = new Vue({
+			el: '#app',
+			data: {
+				name: 'erichow',
+				age: 11,
+				user: {
+					name: 'John Doe',
+					age: 30,
+					location: {
+						city: 'New York'
+					}
+				},
+			},
+			methods: {
+				handleClick() {
+					alert(this.user.name)
+				}
+			}
+		});
+	</script>
+</body>
+</html>
