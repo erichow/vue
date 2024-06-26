@@ -4,8 +4,50 @@
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>vue</title>
+	
+</head>
+<body>
+	<h1>vue2</h1>
+	<div id="vue2">
+		<p style="color: red" class="blue">{{name}},{{age}} <input v-bind:value="age" /></p>
+		<p v-on:click="handleClick">{{ user.name }} is {{ user.age }} years old and lives in {{ user.location.city }}</p>
+		<input v-model="user.name" />
+		<input v-model="user.age" />
+		<input v-model="user.location.city" />
+	</div>
+
+	<hr />
+
+	<h1>vue3</h1>
+	<div id="vue3">
+		<p style="color: red" :class="theme">{{name}},{{age}} <input v-bind:value="age" /></p>
+		<p v-on:click="handleClick">{{ user.name }} is {{ user.age }} years old and lives in {{ user.location.city }}</p>
+		<input v-model="user.name" />
+		<input v-model="user.age" />
+		<input v-model="user.location.city" />
+	</div>
+
 	<script>
 		let activeEffect = undefined
+
+		function compile() {
+			const fragment = document.createDocumentFragment()
+			let child
+			while(child = this.$el.firstChild) {
+				fragment.appendChild(child)
+			}
+			const compile_fragment = node => {
+				if (node.nodeType === 3) {
+					compile_text.call(this, node)
+				}
+				if (node.nodeType === 1) {
+					compile_element.call(this, node)
+				}
+				node.childNodes.forEach(compile_fragment)
+			}
+			compile_fragment(fragment)
+			this.$el.appendChild(fragment)
+		}
 
 		function compile_text(node) {
 			const pattern = /\{\{\s*(\S+?)\s*\}\}/g
@@ -28,14 +70,15 @@
 			Array.from(node.attributes).forEach(attr => {
 				const pattern = /^(@|v-on|:|v-bind|v-model):?(.*)/g
 				const match = pattern.exec(attr.nodeName)
-				const instruction = match[1]
-				const attrName = match ? match[2] : attr.nodeName
+				const instruction = match?.[1]
+				const attrName = match?.[2] || attr.nodeName
 				switch (instruction) {
 					case ':':
 					case 'v-bind':
 						node.removeAttribute(attr.nodeName)
 						useEffect(() => {
-							const value = attr.nodeValue.split('.').reduce((acc, cur) => acc[cur], this.$data)
+							const expression = attr.nodeValue
+							const value = expression.split('.').reduce((acc, cur) => acc[cur], this.$data)
 							node.setAttribute(attrName, value)
 							if (attrName === 'value') {
 								node.value = value
@@ -48,16 +91,16 @@
 					case 'v-model':
 						node.removeAttribute(attr.nodeName)
 						useEffect(() => {
-							let value = attr.nodeValue.split('.').reduce((acc, cur) => acc[cur], this.$data)
+							const expression = attr.nodeValue
+							let value = expression.split('.').reduce((acc, cur) => acc[cur], this.$data)
 							node.setAttribute('value', value)
 							node.value = value
 						})
+
+						// 因为渲染函数可能触发多次所以事件监听写在useEffect外面
 						node.addEventListener('input', event => {
-							console.log('input...')
 							attr.nodeValue.split('.').reduce((acc, cur, idx, arr) => {
-								if (arr.length === idx + 1) {
-									acc[cur] = event.target.value
-								}
+								if (arr.length === idx + 1) acc[cur] = event.target.value
 								return acc[cur]
 							}, this.$data)
 							node.value = value = event.target.value
@@ -65,43 +108,43 @@
 						break
 					case '@':
 					case 'v-on':
+						node.removeAttribute(attr.nodeName)
+						const eventType = match[2]
+						const handler = attr.nodeValue
+						node.addEventListener(eventType, this.$methods[handler].bind(this))
 						break
 					default:
 						break
 				}
 			})
-			
 		}
 
-		class Dep {
-			constructor() {
-				this.effects = new Set
-			}
-			depend() {
-				activeEffect && this.effects.add(activeEffect)
-			}
-			notice() {
-				this.effects?.forEach(effect => effect())
-			}
+		function track(depMap, key) {
+			if (!activeEffect) return
+			const dep = depMap[key] = depMap[key] || new Set
+			dep.add(activeEffect)
+		}
+
+		function trigger(depMap, key) {
+			const dep = depMap[key]
+			dep?.forEach(handler => handler())
 		}
 		
 		function reactive(raw) {
 			if (typeof raw !== 'object' || raw === null) return raw
 			const cache = {} // 缓存属性值
-			const deps = {} // 依赖收集
+			const depMap = {} // 依赖收集
 			return new Proxy(raw, {
 				get(tar, key) {
-					// 收集依赖
-					const dep = deps[key] = deps[key] || new Dep
-					dep.depend()
-					return cache[key] = cache[key] || reactive(tar[key])
+					const result = cache[key] = cache[key] || reactive(tar[key])
+					track(depMap, key)
+					return result
 				},
 				set(tar, key, val) {
-					cache[key] = tar[key] = val
-					// 依赖触发
-					const dep = deps[key]
-					dep?.notice()
-					return true
+					const result = Reflect.set(tar, key, val)
+					cache[key] = Reflect.get(tar, key)
+					trigger(depMap, key)
+					return result
 				}
 			})
 		}
@@ -112,46 +155,66 @@
 			activeEffect = null
 		}
 
+		function createApp(rootComponent) {
+			return {
+		    mount(selector) {
+		      const container = document.querySelector(selector)
+		      const instance = {
+		      	$el: container,
+		        ...rootComponent.setup(),
+		        render: rootComponent.render
+		      }
+		      compile.call(instance)
+		      return instance
+		    }
+		  }
+		}
+
+		// vue2
 		class Vue {
 			constructor(options) {
 				this.$el = document.querySelector(options.el)
 				this.$data = reactive(options.data)
+				this.$methods = options.methods
 				this.compile()
 			}
 			compile() {
-				const fragment = document.createDocumentFragment()
-				let child
-				while(child = this.$el.firstChild) {
-					fragment.appendChild(child)
-				}
-				const compile_fragment = node => {
-					if (node.nodeType === 3) {
-						compile_text.call(this, node)
-					}
-					if (node.nodeType === 1) {
-						compile_element.call(this, node)
-					}
-					node.childNodes.forEach(compile_fragment)
-				}
-				compile_fragment(fragment)
-				this.$el.appendChild(fragment)
+				compile.call(this)
 			}
 		}
 	</script>
-</head>
-<body>
-	<div id="app">
-		<p>{{name}},{{age}}</p>
-		<input v-bind:value="age" />
-		<p v-on:click="handleClick">{{ user.name }} is {{ user.age }} years old and lives in {{ user.location.city }}</p>
-		<input v-model="user.name" />
-		<input v-model="user.age" />
-		<input v-model="user.location.city" />
-	</div>
+
 	<script type="text/javascript">
-		const app = new Vue({
-			el: '#app',
+		const vue3 = createApp({
+			setup() {
+				const $data = reactive({
+					theme: 'blue',
+					name: 'erichow',
+					age: 11,
+					user: {
+						name: 'John Doe',
+						age: 30,
+						location: {
+							city: 'New York'
+						}
+					},
+				})
+				const $methods = {
+					handleClick() {
+			    	alert(this.$data.user.name)
+			    }
+				}
+		    return { $data, $methods }
+			}
+		}).mount('#vue3')
+
+		
+
+
+		const vue2 = new Vue({
+			el: '#vue2',
 			data: {
+				theme: 'blue',
 				name: 'erichow',
 				age: 11,
 				user: {
@@ -164,10 +227,24 @@
 			},
 			methods: {
 				handleClick() {
-					alert(this.user.name)
+					alert(this.$data.user.name)
 				}
 			}
-		});
+		})
+
+
+
+
+		vue2.$data.name = '哦豁'
+		vue2.$data.age= 123
+		vue3.$data.theme = 'red'
+		vue3.$data.age= 444
+		
 	</script>
+
+	<style>
+		.blue { color: blue!important }
+		.red { color: red!important }
+	</style>
 </body>
 </html>
